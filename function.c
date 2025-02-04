@@ -124,3 +124,106 @@ void print_section_headers(Elf64_Ehdr *ehdr, Elf64_Shdr *shdr)
         printf("  Entry size:         %ld\n", shdr[i].sh_entsize);
     }
 }
+
+int copy_sections(int fd, int new_fd, uint16_t shnum, Elf64_Shdr *shdr)
+{
+    for (uint16_t i = 0; i < shnum; i++) {
+        if (shdr[i].sh_type == SHT_NOBITS) {
+            continue;
+        }
+
+        if (lseek(fd, shdr[i].sh_offset, SEEK_SET) < 0) {
+            printf("Error: lseek\n");
+            return -1;
+        }
+
+        if (lseek(new_fd, shdr[i].sh_offset, SEEK_SET) < 0) {
+            printf("Error: lseek\n");
+            return -1;
+        }
+
+        char *buf = (char *)malloc(shdr[i].sh_size);
+        if (read(fd, buf, shdr[i].sh_size) != shdr[i].sh_size) {
+            printf("Error: reading section\n");
+            return -1;
+        }
+
+        if (write(new_fd, buf, shdr[i].sh_size) != shdr[i].sh_size) {
+            printf("Error: writing section\n");
+            return -1;
+        }
+
+        free(buf);
+    }
+
+    return 0;
+}
+
+
+int copy_elf_file(char *filename, char *new_filename)
+{
+    // --- Open files ---
+    int fd = open(filename, O_RDONLY);
+    int new_fd = open(new_filename, O_RDWR | O_CREAT, 0666);
+    
+    if (fd < 0 || new_fd < 0) {
+        printf("Error: opening file\n");
+        return -1;
+    }
+
+    // --- Copy ELF header ---
+    Elf64_Ehdr ehdr;
+
+    read_elf_header(fd, &ehdr);
+
+    lseek(new_fd, 0, SEEK_SET);
+    if (write(new_fd, &ehdr, sizeof(Elf64_Ehdr)) != sizeof(Elf64_Ehdr)) {
+        printf("Error: writing ELF header\n");
+        close(fd);
+        close(new_fd);
+        return -1;
+    }
+
+    // --- Copy program headers ---
+    uint64_t phoff = ehdr.e_phoff;      // Start of program headers
+    uint16_t phnum = ehdr.e_phnum;      // Number of program headers
+    Elf64_Phdr phdr[phnum];             // Program header table (56 byte each entry)
+
+    read_program_headers(fd, &ehdr, phdr);
+
+    lseek(new_fd, phoff, SEEK_SET);
+    for (uint16_t i = 0; i < phnum; i++) {
+        if (write(new_fd, &phdr[i], sizeof(Elf64_Phdr)) != sizeof(Elf64_Phdr)) {
+            printf("Error: writing program header\n");
+            close(fd);
+            close(new_fd);
+            return -1;
+        }
+    }
+
+    // --- Copy sections ---
+    uint64_t shoff = ehdr.e_shoff;          // Start of section headers
+    uint16_t shnum = ehdr.e_shnum;          // Number of section headers
+    Elf64_Shdr shdr[shnum];                 // Section header table (64 byte each entry)
+    
+    read_section_headers(fd, &ehdr, shdr);
+
+    copy_sections(fd, new_fd, shnum, shdr);
+
+    // --- Copy section headers ---
+    lseek(new_fd, shoff, SEEK_SET);
+    for (uint16_t i = 0; i < shnum; i++) {
+        if (write(new_fd, &shdr[i], sizeof(Elf64_Shdr)) != sizeof(Elf64_Shdr)) {
+            printf("Error: writing section header\n");
+            close(fd);
+            close(new_fd);
+            return -1;
+        }
+    }
+
+    // --- Close files ---
+    close(fd);
+    close(new_fd);
+
+    return 0;
+}

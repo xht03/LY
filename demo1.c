@@ -23,7 +23,7 @@ int main()
     }
 
     read_elf_header(fd, &ehdr);
-    // print_elf_header(&ehdr);
+    print_elf_header(&ehdr);
 
 
     uint64_t phoff = ehdr.e_phoff;      // Start of program headers
@@ -32,11 +32,10 @@ int main()
     Elf64_Phdr phdr[phnum];             // Program header (56 byte)
 
     read_program_headers(fd, &ehdr, phdr);
-    // print_program_headers(&ehdr, phdr);
+    print_program_headers(&ehdr, phdr);
 
     uint64_t shoff = ehdr.e_shoff;          // Start of section headers
     uint16_t shnum = ehdr.e_shnum;          // Number of section headers
-    uint16_t shentsize = ehdr.e_shentsize;  // Size of each section header
 
     Elf64_Shdr shdr[shnum];                 // Section header (64 byte)
 

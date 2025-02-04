@@ -9,9 +9,10 @@
 
 
 int read_elf_header(int fd, Elf64_Ehdr *ehdr);
+int read_program_headers(int fd, Elf64_Ehdr *ehdr, Elf64_Phdr *phdr);
+int read_section_headers(int fd, Elf64_Ehdr *ehdr, Elf64_Shdr *shdr);
+
 
 void print_elf_header(Elf64_Ehdr *ehdr);
-
-int read_program_headers(int fd, Elf64_Ehdr *ehdr, Elf64_Phdr *phdr);
-
 void print_program_headers(Elf64_Ehdr *ehdr, Elf64_Phdr *phdr);
+void print_section_headers(Elf64_Ehdr *ehdr, Elf64_Shdr *shdr);

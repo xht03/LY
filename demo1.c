@@ -32,46 +32,16 @@ int main()
     Elf64_Phdr phdr[phnum];             // Program header (56 byte)
 
     read_program_headers(fd, &ehdr, phdr);
-    print_program_headers(&ehdr, phdr);
+    // print_program_headers(&ehdr, phdr);
 
+    uint64_t shoff = ehdr.e_shoff;          // Start of section headers
+    uint16_t shnum = ehdr.e_shnum;          // Number of section headers
+    uint16_t shentsize = ehdr.e_shentsize;  // Size of each section header
 
+    Elf64_Shdr shdr[shnum];                 // Section header (64 byte)
 
-
-    // uint64_t shoff = ehdr.e_shoff;          // Start of section headers
-    // uint16_t shnum = ehdr.e_shnum;          // Number of section headers
-    // uint16_t shentsize = ehdr.e_shentsize;  // Size of each section header
-
-    // for (uint16_t i = 0; i < shnum; i++) {
-    //     Elf64_Shdr shdr;            // Section header (64 byte)
-
-    //     if (lseek(fd, shoff + i * shentsize, SEEK_SET) < 0) {
-    //         printf("Error: seeking section header\n");
-    //         close(fd);
-    //         return 1;
-    //     }
-
-    //     if (read(fd, &shdr, sizeof(shdr)) != sizeof(shdr)) {
-    //         printf("Error: reading section header\n");
-    //         close(fd);
-    //         return 1;
-    //     }
-
-    //     printf("Section Header %d:\n", i);
-    //     printf("  Name:               %u\n", shdr.sh_name);
-    //     printf("  Type:               0x%x\n", shdr.sh_type);
-    //     printf("  Flags:              0x%lx\n", shdr.sh_flags);
-    //     printf("  Address:            0x%lx\n", shdr.sh_addr);
-    //     printf("  Offset:             %ld\n", shdr.sh_offset);
-    //     printf("  Size:               %ld\n", shdr.sh_size);
-    //     printf("  Link:               %u\n", shdr.sh_link);
-    //     printf("  Info:               %u\n", shdr.sh_info);
-    //     printf("  Address alignment:  %ld\n", shdr.sh_addralign);
-    //     printf("  Entry size:         %ld\n", shdr.sh_entsize);
-    // }
-
-
-    
-
+    read_section_headers(fd, &ehdr, shdr);
+    print_section_headers(&ehdr, shdr);
 
     close(fd);
     return 0;

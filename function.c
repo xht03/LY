@@ -53,12 +53,12 @@ int read_program_headers(int fd, Elf64_Ehdr *ehdr, Elf64_Phdr *phdr)
 
     // Each program header has 56 byte
     for (uint16_t i = 0; i < phnum; i++) {
-        if (lseek(fd, phoff + i * sizeof(phdr), SEEK_SET) < 0) {
+        if (lseek(fd, phoff + i * sizeof(Elf64_Phdr), SEEK_SET) < 0) {
             printf("Error: lseek\n");
             return -1;
         }
 
-        if (read(fd, &phdr[i], sizeof(phdr)) != sizeof(phdr)) {
+        if (read(fd, &phdr[i], sizeof(Elf64_Phdr)) != sizeof(Elf64_Phdr)) {
             printf("Error: reading program header\n");
             return -1;
         }
@@ -81,5 +81,46 @@ void print_program_headers(Elf64_Ehdr *ehdr, Elf64_Phdr *phdr)
         printf("  File Size:          %ld\n", phdr[i].p_filesz);
         printf("  Memory Size:        %ld\n", phdr[i].p_memsz);
         printf("  Alignment:          %ld\n", phdr[i].p_align);
+    }
+}
+
+int read_section_headers(int fd, Elf64_Ehdr *ehdr, Elf64_Shdr *shdr)
+{
+    uint64_t shoff = ehdr->e_shoff;          // Start of section headers
+    uint16_t shnum = ehdr->e_shnum;          // Number of section headers
+    uint16_t shentsize = ehdr->e_shentsize;  // Size of each section header
+
+    // Each section header has 64 byte
+    for (uint16_t i = 0; i < shnum; i++) {
+        if (lseek(fd, shoff + i * shentsize, SEEK_SET) < 0) {
+            printf("Error: lseek\n");
+            return -1;
+        }
+
+        if (read(fd, &shdr[i], sizeof(Elf64_Shdr)) != sizeof(Elf64_Shdr)) {
+            printf("Error: reading section header\n");
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+void print_section_headers(Elf64_Ehdr *ehdr, Elf64_Shdr *shdr)
+{
+    uint16_t shnum = ehdr->e_shnum;          // Number of section headers
+
+    for (uint16_t i = 0; i < shnum; i++) {
+        printf("Section Header %d:\n", i);
+        printf("  Name:               %u\n", shdr[i].sh_name);
+        printf("  Type:               0x%x\n", shdr[i].sh_type);
+        printf("  Flags:              0x%lx\n", shdr[i].sh_flags);
+        printf("  Address:            0x%lx\n", shdr[i].sh_addr);
+        printf("  Offset:             %ld\n", shdr[i].sh_offset);
+        printf("  Size:               %ld\n", shdr[i].sh_size);
+        printf("  Link:               %u\n", shdr[i].sh_link);
+        printf("  Info:               %u\n", shdr[i].sh_info);
+        printf("  Address alignment:  %ld\n", shdr[i].sh_addralign);
+        printf("  Entry size:         %ld\n", shdr[i].sh_entsize);
     }
 }

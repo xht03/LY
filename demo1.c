@@ -33,10 +33,8 @@ int main()
 
     read_program_headers(fd, &ehdr, phdr);
     print_program_headers(&ehdr, phdr);
-    
-    uint64_t current_off = lseek(fd, 0, SEEK_CUR);
 
-    printf("\ncurrent offset: %ld\n\n", current_off);
+
 
 
     // uint64_t shoff = ehdr.e_shoff;          // Start of section headers

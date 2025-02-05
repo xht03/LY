@@ -125,6 +125,49 @@ void print_section_headers(Elf64_Ehdr *ehdr, Elf64_Shdr *shdr)
     }
 }
 
+int read_string_table(int fd, Elf64_Ehdr *ehdr, char *shstrtab)
+{
+    uint16_t shstrndx = ehdr->e_shstrndx;       // Section header string table index
+    uint16_t shnum = ehdr->e_shnum;             // Number of section headers
+    Elf64_Shdr shdr[shnum];                     // Section header table (64 byte each entry)
+
+    if (shstrndx >= shnum) {
+        printf("Error: section header string table index is invalid\n");
+        return -1;
+    }
+
+    // --- Read section headers ---
+    if (lseek(fd, ehdr->e_shoff, SEEK_SET) < 0) {
+        printf("Error: lseek\n");
+        return -1;
+    }
+
+    if (read(fd, shdr, shnum * sizeof(Elf64_Shdr)) != shnum * sizeof(Elf64_Shdr)) {
+        printf("Error: reading section headers\n");
+        return -1;
+    }
+
+    // --- Read section header string table ---
+    if (lseek(fd, shdr[shstrndx].sh_offset, SEEK_SET) < 0) {
+        printf("Error: lseek\n");
+        return -1;
+    }
+
+    shstrtab = (char *)malloc(shdr[shstrndx].sh_size);
+
+    if (read(fd, shstrtab, shdr[shstrndx].sh_size) != shdr[shstrndx].sh_size) {
+        printf("Error: reading section header string table\n");
+        return -1;
+    }
+
+    // --- Print section header string table ---
+    // for(int i = 0; i < shnum; i++) {
+    //     printf("Section %d: %s\n", i, shstrtab + shdr[i].sh_name);
+    // }
+
+    return 0;
+}
+
 int copy_sections(int fd, int new_fd, uint16_t shnum, Elf64_Shdr *shdr)
 {
     for (uint16_t i = 0; i < shnum; i++) {
@@ -226,4 +269,59 @@ int copy_elf_file(char *filename, char *new_filename)
     close(new_fd);
 
     return 0;
+}
+
+
+// uint16_t get_section_index(int fd, Elf64_Ehdr *ehdr, Elf64_Shdr *shdr, char *section_name)
+// {
+//     char *shstrtab = NULL;
+//     uint16_t shstrndx = ehdr->e_shstrndx;
+//     uint16_t shnum = ehdr->e_shnum;
+
+//     // Read section header string table
+//     if (read_string_table(fd, ehdr, shstrtab) < 0) {
+//         return -1;
+//     }
+
+//     // Find section index by name
+//     for (uint16_t i = 0; i < shnum; i++) {
+//         if (strcmp(section_name, shstrtab + shdr[i].sh_name) == 0) {
+//             free(shstrtab);
+//             return i;
+//         }
+//     }
+
+//     free(shstrtab);
+//     return -1;
+// }
+
+
+uint64_t create_trampoline(char *filename, char *new_filename, char *section_name, uint16_t section_size)
+{
+    // --- Open files ---
+    int fd = open(filename, O_RDONLY);
+    int new_fd = open(new_filename, O_RDWR | O_CREAT, 0666);
+    
+    if (fd < 0 || new_fd < 0) {
+        printf("Error: opening file\n");
+        return -1;
+    }
+
+    // --- Modify elf header ---
+    Elf64_Ehdr ehdr;
+
+    read_elf_header(fd, &ehdr);
+
+    if(section_size % 8 != 0) {
+        printf("Error: section size must be aligned.\n");
+        close(fd);
+        close(new_fd);
+        return -1;
+    }
+    ehdr.e_shoff += section_size;
+    ehdr.e_shnum += 1;
+    ehdr.e_shstrndx += 1;
+
+
+
 }

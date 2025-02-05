@@ -1,0 +1,23 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "build demo3",
+            "type": "shell",
+            "command": "gcc",
+            "args": [
+                "-g",
+                "${workspaceFolder}/demo3.c",
+                "${workspaceFolder}/mylib/function.c",
+                "-o",
+                "${workspaceFolder}/bin/demo3",
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            },
+            "problemMatcher": ["$gcc"],
+            "detail": "Generated task for building demo3.c"
+        }
+    ]
+}

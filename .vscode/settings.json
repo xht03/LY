@@ -7,5 +7,8 @@
         "stdio.h": "c",
         "string.h": "c",
         "unistd.h": "c"
+    },
+    "files.watcherExclude": {
+        "**/target": true
     }
 }

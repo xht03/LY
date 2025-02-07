@@ -17,11 +17,14 @@ void print_elf_header(Elf64_Ehdr *ehdr);
 void print_program_headers(Elf64_Ehdr *ehdr, Elf64_Phdr *phdr);
 void print_section_headers(Elf64_Ehdr *ehdr, Elf64_Shdr *shdr);
 
+int copy_elf_header(int new_fd, Elf64_Ehdr *ehdr);
 int copy_sections(int fd, int new_fd, uint16_t shnum, Elf64_Shdr *shdr);
 int copy_elf_file(char *filename, char *new_filename);
 
 
 
-uint16_t get_section_index(int fd, Elf64_Ehdr *ehdr, Elf64_Shdr *shdr, char *section_name);
 
-uint64_t create_trampoline(char *filename, char *new_filename, char *section_name);
+
+uint64_t get_free_vspace(Elf64_Ehdr *ehdr, Elf64_Phdr *phdr, uint64_t size, uint64_t align);
+
+uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint16_t section_size);

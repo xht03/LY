@@ -7,6 +7,9 @@
 #include <bfd.h>
 #include <elf.h>
 
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#define ALIGN_UP(x, a) (((x) + (a) - 1) & ~((a) - 1))
+
 int read_elf_header(int fd, Elf64_Ehdr *ehdr)
 {
     if (lseek(fd, 0, SEEK_SET) < 0) {
@@ -168,6 +171,22 @@ int read_string_table(int fd, Elf64_Ehdr *ehdr, char *shstrtab)
     return 0;
 }
 
+int copy_elf_header(int new_fd, Elf64_Ehdr *ehdr)
+{
+    if (lseek(new_fd, 0, SEEK_SET) < 0) {
+        printf("Error: lseek\n");
+        return -1;
+    }
+
+    if (write(new_fd, ehdr, sizeof(Elf64_Ehdr)) != sizeof(Elf64_Ehdr)) {
+        printf("Error: writing ELF header\n");
+        return -1;
+    }
+
+    return 0;
+}
+
+
 int copy_sections(int fd, int new_fd, uint16_t shnum, Elf64_Shdr *shdr)
 {
     for (uint16_t i = 0; i < shnum; i++) {
@@ -271,56 +290,130 @@ int copy_elf_file(char *filename, char *new_filename)
     return 0;
 }
 
+int compare_phdr(const void *a, const void *b) {
+    Elf64_Phdr *phdr_a = (Elf64_Phdr *)a;
+    Elf64_Phdr *phdr_b = (Elf64_Phdr *)b;
 
-// uint16_t get_section_index(int fd, Elf64_Ehdr *ehdr, Elf64_Shdr *shdr, char *section_name)
-// {
-//     char *shstrtab = NULL;
-//     uint16_t shstrndx = ehdr->e_shstrndx;
-//     uint16_t shnum = ehdr->e_shnum;
-
-//     // Read section header string table
-//     if (read_string_table(fd, ehdr, shstrtab) < 0) {
-//         return -1;
-//     }
-
-//     // Find section index by name
-//     for (uint16_t i = 0; i < shnum; i++) {
-//         if (strcmp(section_name, shstrtab + shdr[i].sh_name) == 0) {
-//             free(shstrtab);
-//             return i;
-//         }
-//     }
-
-//     free(shstrtab);
-//     return -1;
-// }
-
-
-uint64_t create_trampoline(char *filename, char *new_filename, char *section_name, uint16_t section_size)
-{
-    // --- Open files ---
-    int fd = open(filename, O_RDONLY);
-    int new_fd = open(new_filename, O_RDWR | O_CREAT, 0666);
-    
-    if (fd < 0 || new_fd < 0) {
-        printf("Error: opening file\n");
+    if (phdr_a->p_vaddr < phdr_b->p_vaddr) {
         return -1;
+    } else if (phdr_a->p_vaddr > phdr_b->p_vaddr) {
+        return 1;
+    } else {
+        return 0;
     }
+}
+
+void sort_phdr_by_vaddr(Elf64_Phdr phdr[], size_t phnum) {
+    qsort(phdr, phnum, sizeof(Elf64_Phdr), compare_phdr);
+}
+
+uint64_t get_free_vspace(Elf64_Ehdr *ehdr, Elf64_Phdr *phdr, uint64_t size, uint64_t align)
+{
+    /**
+     * @brief Get the free virtual space in the ELF file.
+     * 
+     * @note The virtual space must be aligned.
+     */
+
+    uint16_t phnum = ehdr->e_phnum;         // Number of program headers
+    Elf64_Phdr temp_phdr[phnum];            // Temporary program header table
+
+    memcpy(temp_phdr, phdr, phnum * sizeof(Elf64_Phdr));
+    sort_phdr_by_vaddr(temp_phdr, phnum);
+
+    // Merge used intervals and try to find the free space between them
+    uint64_t start = temp_phdr[0].p_vaddr;
+    uint64_t end = temp_phdr[0].p_vaddr + temp_phdr[0].p_memsz;
+
+    for (uint16_t i = 0; i < phnum; i++) {
+        if (temp_phdr[i].p_type & PT_LOAD) {
+            uint64_t seg_start = temp_phdr[i].p_vaddr;
+            uint64_t seg_end = temp_phdr[i].p_vaddr + temp_phdr[i].p_memsz;
+
+            if (seg_start <= end) {
+                end = MAX(end, seg_end);
+            }
+            else {
+                if (size <= seg_start - end) {
+                    uint64_t v_start = ALIGN_UP(end, align);
+                    uint64_t v_end = v_start + size;
+
+                    if (v_end <= seg_start) {
+                        return v_start;
+                    }
+                }
+
+                end = seg_end;
+            }    
+        }
+    }
+
+    // If the free space is at the end of the file
+    return ALIGN_UP(end, align);
+}
+
+
+
+uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint16_t section_size)
+{
+    /**
+     * @brief Create a trampoline section at the end of the elf file.
+     * 
+     * @note The trampoline section must be loadable into memory and executable.
+     */
+
 
     // --- Modify elf header ---
     Elf64_Ehdr ehdr;
+    Elf64_Ehdr new_ehdr;
 
     read_elf_header(fd, &ehdr);
+    memcpy(&new_ehdr, &ehdr, sizeof(Elf64_Ehdr));
 
-    if(section_size % 8 != 0) {
+    if(section_size % 16 != 0) {
         printf("Error: section size must be aligned.\n");
         close(fd);
         close(new_fd);
         return -1;
+    }   // not sure
+
+    new_ehdr.e_phnum += 1;
+    new_ehdr.e_shoff += section_size;
+    new_ehdr.e_shnum += 1;
+
+    copy_elf_header(new_fd, &new_ehdr);
+
+    // --- Add a new program header ---
+
+    uint64_t phoff = ehdr.e_phoff;      // Start of program headers
+    uint16_t phnum = ehdr.e_phnum;      // Number of program headers
+
+    Elf64_Phdr phdr[phnum];             // Program header (56 byte each entry)
+    Elf64_Phdr new_phdr[phnum + 1];
+
+    read_program_headers(fd, &ehdr, phdr);
+
+    for (uint16_t i = 0; i < phnum; i++) {
+        memcpy(&new_phdr[i], &phdr[i], sizeof(Elf64_Phdr));
     }
-    ehdr.e_shoff += section_size;
-    ehdr.e_shnum += 1;
-    ehdr.e_shstrndx += 1;
+
+    // --- Move the sections before the .init section ---
+    
+
+    // --- Modify the new program header ---
+
+    new_phdr[phnum].p_type = PT_LOAD;
+    new_phdr[phnum].p_flags = PF_X | PF_R;
+    new_phdr[phnum].p_offset = ALIGN_UP(ehdr.e_shoff, 0x1000);
+    new_phdr[phnum].p_vaddr = get_free_vspace(&ehdr, phdr, section_size, 0x1000);
+    new_phdr[phnum].p_paddr = new_phdr[phnum].p_vaddr;
+    new_phdr[phnum].p_filesz = section_size;
+    new_phdr[phnum].p_memsz = section_size;
+    new_phdr[phnum].p_align = 0x1000;           // code alignment
+
+    
+
+
 
 
 

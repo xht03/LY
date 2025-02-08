@@ -13,6 +13,10 @@ int read_program_headers(int fd, Elf64_Ehdr *ehdr, Elf64_Phdr *phdr);
 int read_section_headers(int fd, Elf64_Ehdr *ehdr, Elf64_Shdr *shdr);
 int read_string_table(int fd, Elf64_Ehdr *ehdr, char *shstrtab);
 
+char* read_section_by_index(int fd, uint16_t index);
+
+uint16_t get_section_index_by_name(int fd, char *section_name);
+
 void print_elf_header(Elf64_Ehdr *ehdr);
 void print_program_headers(Elf64_Ehdr *ehdr, Elf64_Phdr *phdr);
 void print_section_headers(Elf64_Ehdr *ehdr, Elf64_Shdr *shdr);

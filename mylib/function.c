@@ -7,6 +7,8 @@
 #include <bfd.h>
 #include <elf.h>
 
+#include "mylib/function.h"
+
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define ALIGN_UP(x, a) (((x) + (a) - 1) & ~((a) - 1))
 
@@ -215,6 +217,50 @@ uint16_t get_section_index_by_name(int fd, char *section_name)
     return -1;
 }
 
+SecList* get_seg2sec_mapping(int fd)
+{
+    Elf64_Ehdr ehdr;
+    Elf64_Phdr phdr[ehdr.e_phnum];
+    Elf64_Shdr shdr[ehdr.e_shnum];
+    char *shstrtab;
+
+    read_elf_header(fd, &ehdr);
+    read_program_headers(fd, &ehdr, phdr);
+    read_section_headers(fd, &ehdr, shdr);
+    read_string_table(fd, &ehdr, shstrtab);
+
+    SecList *seg2sec = (SecList *)malloc(ehdr.e_phnum * sizeof(SecList));
+
+    for (uint16_t i = 0; i < ehdr.e_phnum; i++) {
+        seg2sec[i].sec_num = 0;
+        seg2sec[i].sec_idx = (uint16_t *)malloc(ehdr.e_shnum * sizeof(uint16_t));
+    }
+
+    for (uint16_t i = 0; i < ehdr.e_shnum; i++) {
+        for (uint16_t j = 0; j < ehdr.e_phnum; j++) {
+            if (shdr[i].sh_offset >= phdr[j].p_offset && shdr[i].sh_offset < phdr[j].p_offset + phdr[j].p_filesz) {
+                seg2sec[j].sec_idx[seg2sec[j].sec_num] = i;
+                seg2sec[j].sec_num++;
+            }
+        }
+    }
+
+    free(shstrtab);
+
+    return seg2sec;
+}
+
+int free_seg2sec_mapping(SecList *seg2sec, Elf64_Ehdr *ehdr)
+{
+    for (uint16_t i = 0; i < ehdr->e_phnum; i++) {
+        free(seg2sec[i].sec_idx);
+    }
+
+    free(seg2sec);
+
+    return 0;
+}
+
 int copy_elf_header(int new_fd, Elf64_Ehdr *ehdr)
 {
     if (lseek(new_fd, 0, SEEK_SET) < 0) {
@@ -351,63 +397,16 @@ void sort_phdr_by_vaddr(Elf64_Phdr phdr[], size_t phnum) {
     qsort(phdr, phnum, sizeof(Elf64_Phdr), compare_phdr);
 }
 
-uint64_t get_free_vspace(Elf64_Ehdr *ehdr, Elf64_Phdr *phdr, uint64_t size, uint64_t align)
+uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint16_t section_size, uint64_t section_align)
 {
     /**
-     * @brief Get the free virtual space in the ELF file.
-     * 
-     * @note The virtual space must be aligned.
-     */
-
-    uint16_t phnum = ehdr->e_phnum;         // Number of program headers
-    Elf64_Phdr temp_phdr[phnum];            // Temporary program header table
-
-    memcpy(temp_phdr, phdr, phnum * sizeof(Elf64_Phdr));
-    sort_phdr_by_vaddr(temp_phdr, phnum);
-
-    // Merge used intervals and try to find the free space between them
-    uint64_t start = temp_phdr[0].p_vaddr;
-    uint64_t end = temp_phdr[0].p_vaddr + temp_phdr[0].p_memsz;
-
-    for (uint16_t i = 0; i < phnum; i++) {
-        if (temp_phdr[i].p_type & PT_LOAD) {
-            uint64_t seg_start = temp_phdr[i].p_vaddr;
-            uint64_t seg_end = temp_phdr[i].p_vaddr + temp_phdr[i].p_memsz;
-
-            if (seg_start <= end) {
-                end = MAX(end, seg_end);
-            }
-            else {
-                if (size <= seg_start - end) {
-                    uint64_t v_start = ALIGN_UP(end, align);
-                    uint64_t v_end = v_start + size;
-
-                    if (v_end <= seg_start) {
-                        return v_start;
-                    }
-                }
-
-                end = seg_end;
-            }    
-        }
-    }
-
-    // If the free space is at the end of the file
-    return ALIGN_UP(end, align);
-}
-
-
-
-uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint16_t section_size)
-{
-    /**
-     * @brief Create a trampoline section at the end of the elf file.
+     * @brief Create a trampoline section at the end of the elf file. Return the virtual address of the trampoline section.
      * 
      * @note The trampoline section must be loadable into memory and executable.
      */
 
-    uint64_t off = 0;       // Offset in the new file
-    uint64_t addr = 0;      // Virtual address in the new file
+    uint64_t off = 0;       // To locate offset in the new file
+    uint64_t addr = 0;      // To locate virtual address in the new file
 
     // --- Collect information ---
     Elf64_Ehdr ehdr;
@@ -419,34 +418,23 @@ uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint1
     Elf64_Shdr shdr[ehdr.e_shnum];
     read_section_headers(fd, &ehdr, shdr);
 
-    char *shstrtab;
-    read_string_table(fd, &ehdr, shstrtab);
+    SecList *seg2sec = get_seg2sec_mapping(fd);
 
     // --- Make elf header ---
     /**
     * 1. the number of program headers + 1
     * 2. the number of section headers + 1
-    ** 3. start of section headers may change
-    ** 4. Entry point address may change
-    * many things need to be modified later
+    ** 3. start of section headers would change later
+    ** 4. Entry point address may change later
+    *
     */
+
     Elf64_Ehdr new_ehdr;
     
     memcpy(&new_ehdr, &ehdr, sizeof(Elf64_Ehdr));
 
     new_ehdr.e_phnum += 1;
     new_ehdr.e_shnum += 1;
-
-    off += sizeof(Elf64_Ehdr);
-    addr += sizeof(Elf64_Ehdr);
-    
-    // --- Copy program headers ---
-
-    Elf64_Phdr new_phdr[new_ehdr.e_phnum];
-    memcpy(new_phdr, phdr, ehdr.e_phnum * sizeof(Elf64_Phdr));
-
-    off += new_ehdr.e_phnum * sizeof(Elf64_Phdr);
-    addr += new_ehdr.e_phnum * sizeof(Elf64_Phdr);
 
     // --- Copy section headers ---
 
@@ -455,7 +443,10 @@ uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint1
 
     // --- Copy sections and adjust offset, address ---
 
-    // shdr[0] is a null section
+    off = sizeof(Elf64_Ehdr) + new_ehdr.e_phnum * sizeof(Elf64_Phdr);
+    addr = sizeof(Elf64_Ehdr) + new_ehdr.e_phnum * sizeof(Elf64_Phdr);
+
+    /* shdr[0] is a null section */
 
     for (uint16_t i = 1; i < ehdr.e_shnum; i++) {
 
@@ -463,23 +454,30 @@ uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint1
             continue;
         }
 
-        uint64_t align;         // Section alignment
-        uint64_t start_off;     // Section start offset
-        uint64_t start_addr;    // Section start address
-        char *buf = read_section_by_index(fd, i);       // Section data
+        // Calculate alignment
+        uint64_t shr_align = MAX(shdr[i].sh_addralign, 1);          // Section alignment
+        uint64_t phr_align = 1;                                     // Program header alignment
 
-        if (shdr[i].sh_addralign == 0) {
-            align = 1;
-        }
-        else {
-            align = shdr[i].sh_addralign;
+        for (uint16_t j = 0; j < ehdr.e_phnum; j++) {
+            if (seg2sec[j].sec_num == 0) {
+                continue;
+            }
+
+            if (seg2sec[j].sec_idx[0] == i) {
+                phr_align = MAX(phr_align, phdr[j].p_align);
+            }
         }
 
-        start_off = ALIGN_UP(off, align);
-        new_shdr[i].sh_offset = start_off;
-        
+        uint64_t align = MAX(shr_align, phr_align);     // Final alignment
+
+        // Calculate start offset and address
+        new_shdr[i].sh_addr = ALIGN_UP(off, align);
+        new_shdr[i].sh_offset = ALIGN_UP(addr, align);
+
         // Write into new file
-        if (lseek(new_fd, start_off, SEEK_SET) < 0) {
+        char *buf = read_section_by_index(fd, i);       // Section data
+        
+        if (lseek(new_fd, new_shdr[i].sh_offset, SEEK_SET) < 0) {
             printf("Error: lseek\n");
             return -1;
         }
@@ -488,7 +486,8 @@ uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint1
             return -1;
         }
 
-        off = start_off + shdr[i].sh_size;
+        off = new_shdr[i].sh_offset + shdr[i].sh_size;
+        addr = new_shdr[i].sh_addr + shdr[i].sh_size;
 
         // If the section is the section header string table
         // Add the trampline section name to the end of the string table
@@ -507,41 +506,37 @@ uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint1
             new_shdr[i].sh_size += strlen(section_name) + 1;
             
             off += strlen(section_name) + 1;
+            addr += strlen(section_name) + 1;
         }
     }
 
     // --- Create trampoline section ---
 
-    uint64_t trampoline_start = ALIGN_UP(off, 16);
+    uint64_t trampoline_off = ALIGN_UP(off, section_align);
+    uint64_t trampoline_addr = ALIGN_UP(addr, section_align);
 
-    // Update its section header
+    /* Update its section header */
     new_shdr[ehdr.e_shnum].sh_name = shdr[ehdr.e_shstrndx].sh_size;
     new_shdr[ehdr.e_shnum].sh_type = SHT_PROGBITS;
     new_shdr[ehdr.e_shnum].sh_flags = SHF_ALLOC | SHF_EXECINSTR;        // same to BiRFIA
-    new_shdr[ehdr.e_shnum].sh_addr = ;                                  //* not sure now
-    new_shdr[ehdr.e_shnum].sh_offset = trampoline_start;
+    new_shdr[ehdr.e_shnum].sh_addr = trampoline_addr;
+    new_shdr[ehdr.e_shnum].sh_offset = trampoline_off;
     new_shdr[ehdr.e_shnum].sh_size = section_size;
     new_shdr[ehdr.e_shnum].sh_link = 0;
     new_shdr[ehdr.e_shnum].sh_info = 0;
-    new_shdr[ehdr.e_shnum].sh_addralign = 16;
+    new_shdr[ehdr.e_shnum].sh_addralign = section_align;
     new_shdr[ehdr.e_shnum].sh_entsize = 0;
 
-    // Update its program header
-    new_phdr[ehdr.e_phnum].p_type = PT_LOAD;
-    new_phdr[ehdr.e_phnum].p_flags = PF_X | PF_W;
-    new_phdr[ehdr.e_phnum].p_offset = trampoline_start;
-    new_phdr[ehdr.e_phnum].p_vaddr = ;                                  //* not sure now
-    new_phdr[ehdr.e_phnum].p_paddr = ;                                  //* not sure now
-    new_phdr[ehdr.e_phnum].p_filesz = section_size;
-    new_phdr[ehdr.e_phnum].p_memsz = section_size;
-    new_phdr[ehdr.e_phnum].p_align = 0x1000;
+    off = trampoline_off + section_size;
+    addr = trampoline_addr + section_size;
 
-    off = trampoline_start + section_size;
 
     // --- Update and write ELF header ---
 
-    uint64_t new_shoff = ALIGN_UP(off, 8);      // Start of section headers
-    new_ehdr.e_shoff = new_shoff;
+    uint16_t text_idx = get_section_index_by_name(fd, ".text");
+
+    new_ehdr.e_entry = new_shdr[text_idx].sh_addr;      // Entry point address
+    new_ehdr.e_shoff = ALIGN_UP(off, 8);                // Start of section headers
 
     if (lseek(new_fd, 0, SEEK_SET) < 0) {
         printf("Error: lseek\n");
@@ -556,7 +551,7 @@ uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint1
     // --- Write section headers ---
 
     for (uint16_t i = 0; i < new_ehdr.e_shnum; i++) {
-        if (lseek(new_fd, new_shoff + i * sizeof(Elf64_Shdr), SEEK_SET) < 0) {
+        if (lseek(new_fd, new_ehdr.e_shoff + i * sizeof(Elf64_Shdr), SEEK_SET) < 0) {
             printf("Error: lseek\n");
             return -1;
         }
@@ -567,59 +562,67 @@ uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint1
         }
     }
 
-    // --- Update program header table itself---
+    // --- Copy program headers ---
+
+    Elf64_Phdr new_phdr[new_ehdr.e_phnum];
+    memcpy(new_phdr, phdr, ehdr.e_phnum * sizeof(Elf64_Phdr));
+
+    // --- Modify program headers ---
+
+    /* Update program header 0 */
     if(phdr[0].p_type == PT_PHDR) {
-        new_phdr[0].p_filesz = phdr[i].p_filesz + sizeof(Elf64_Phdr);
-        new_phdr[0].p_memsz = phdr[i].p_memsz + sizeof(Elf64_Phdr);
+        new_phdr[0].p_filesz = phdr[0].p_filesz + sizeof(Elf64_Phdr);
+        new_phdr[0].p_memsz = phdr[0].p_memsz + sizeof(Elf64_Phdr);
     }
     else {
         printf("Error: the first program header is not PT_PHDR\n");
         return -1;
     }
 
-    // --- Update and write program headers ---
-
-    uint64_t vaddr = sizeof(Elf64_Ehdr);
-
+    /* Update the following original program headers */
     for (uint16_t i = 1; i < ehdr.e_phnum; i++) {
-
-        uint64_t old_start = phdr[i].p_offset;
-        uint64_t old_end = phdr[i].p_offset + phdr[i].p_filesz;
-
-        uint16_t sec_start = 0;
-        uint16_t sec_end = 0;
-
-        // Find the Section to Segment mapping
-        for (uint16_t j = 0; j < ehdr.e_shnum; j++) {
-            if (shdr[j].sh_offset == old_start) {
-                sec_start = j;
-            }
-            if (shdr[j].sh_offset + shdr[j].sh_size == old_end) {
-                sec_end = j;
-            }
+        if(seg2sec[i].sec_num) {
+            continue;
         }
 
-        uint64_t new_start = new_shdr[sec_start].sh_offset;
-        uint64_t new_end = new_shdr[sec_end].sh_offset + new_shdr[sec_end].sh_size;
+        uint16_t num = seg2sec[i].sec_num;
 
-
-        new_phdr[i].p_offset = new_start;
-        new_phdr[i].p_filesz = new_end - new_start;
-        new_phdr[i].p_memsz = (new_end - new_start) + (phdr[i].p_memsz - phdr[i].p_filesz);
-
-
-
-
+        new_phdr[i].p_offset = new_shdr[seg2sec[i].sec_idx[0]].sh_offset;
+        new_phdr[i].p_vaddr = new_shdr[seg2sec[i].sec_idx[0]].sh_addr;
+        new_phdr[i].p_paddr = new_shdr[seg2sec[i].sec_idx[0]].sh_addr;
+        new_phdr[i].p_filesz = new_shdr[seg2sec[i].sec_idx[num - 1]].sh_offset + new_shdr[seg2sec[i].sec_idx[num - 1]].sh_size - new_shdr[seg2sec[i].sec_idx[0]].sh_offset;
+        new_phdr[i].p_memsz = new_shdr[seg2sec[i].sec_idx[num - 1]].sh_addr + new_shdr[seg2sec[i].sec_idx[num - 1]].sh_size - new_shdr[seg2sec[i].sec_idx[0]].sh_addr;
     }
 
+    /* Update the program header of trampoline section*/
+    new_phdr[ehdr.e_phnum].p_type = PT_LOAD;
+    new_phdr[ehdr.e_phnum].p_flags = PF_X | PF_W;
+    new_phdr[ehdr.e_phnum].p_offset = new_shdr[ehdr.e_shnum].sh_offset;
+    new_phdr[ehdr.e_phnum].p_vaddr = new_shdr[ehdr.e_shnum].sh_addr;
+    new_phdr[ehdr.e_phnum].p_paddr = new_shdr[ehdr.e_shnum].sh_addr;
+    new_phdr[ehdr.e_phnum].p_filesz = section_size;
+    new_phdr[ehdr.e_phnum].p_memsz = section_size;
+    new_phdr[ehdr.e_phnum].p_align = section_align;
 
+    // --- Write program headers ---
 
+    for (uint16_t i = 0; i < new_ehdr.e_phnum; i++) {
+        if (lseek(new_fd, sizeof(Elf64_Ehdr) + i * sizeof(Elf64_Phdr), SEEK_SET) < 0) {
+            printf("Error: lseek\n");
+            return -1;
+        }
 
-
-
-
-
-
+        if (write(new_fd, &new_phdr[i], sizeof(Elf64_Phdr)) != sizeof(Elf64_Phdr)) {
+            printf("Error: writing program header\n");
+            return -1;
+        }
+    }
     
+    // --- Close files ---
 
+    free_seg2sec_mapping(seg2sec, &ehdr);
+    close(fd);
+    close(new_fd);
+
+    return trampoline_addr;
 }

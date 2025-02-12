@@ -7,7 +7,7 @@
 #include <bfd.h>
 #include <elf.h>
 
-#include "mylib/function.h"
+#include "function.h"
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
 #define ALIGN_UP(x, a) (((x) + (a) - 1) & ~((a) - 1))
@@ -176,9 +176,9 @@ int read_string_table(int fd, Elf64_Ehdr *ehdr, char *shstrtab)
 char* read_section_by_index(int fd, uint16_t index)
 {
     Elf64_Ehdr ehdr;
-    Elf64_Shdr shdr[ehdr.e_shnum];
-
     read_elf_header(fd, &ehdr);
+
+    Elf64_Shdr shdr[ehdr.e_shnum];
     read_section_headers(fd, &ehdr, &shdr);
 
     char *buf = (char *)malloc(shdr[index].sh_size);
@@ -222,12 +222,10 @@ SecList* get_seg2sec_mapping(int fd)
     Elf64_Ehdr ehdr;
     Elf64_Phdr phdr[ehdr.e_phnum];
     Elf64_Shdr shdr[ehdr.e_shnum];
-    char *shstrtab;
 
     read_elf_header(fd, &ehdr);
     read_program_headers(fd, &ehdr, phdr);
     read_section_headers(fd, &ehdr, shdr);
-    read_string_table(fd, &ehdr, shstrtab);
 
     SecList *seg2sec = (SecList *)malloc(ehdr.e_phnum * sizeof(SecList));
 
@@ -245,7 +243,14 @@ SecList* get_seg2sec_mapping(int fd)
         }
     }
 
-    free(shstrtab);
+    // print the mapping relationship
+    for (uint16_t i = 0; i < ehdr.e_phnum; i++) {
+        printf("Segment %d: ", i);
+        for (uint16_t j = 0; j < seg2sec[i].sec_num; j++) {
+            printf("%d ", seg2sec[i].sec_idx[j]);
+        }
+        printf("\n");
+    }
 
     return seg2sec;
 }
@@ -581,7 +586,7 @@ uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint1
 
     /* Update the following original program headers */
     for (uint16_t i = 1; i < ehdr.e_phnum; i++) {
-        if(seg2sec[i].sec_num) {
+        if(seg2sec[i].sec_num == 0) {
             continue;
         }
 

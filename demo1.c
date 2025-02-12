@@ -10,41 +10,25 @@
 #include "mylib/function.h"
 
 /**
- * @brief Example of reading information from ELF file
+ * @brief Example of creating a trampoline section in an ELF file
  */
 
 int main()
 {
-    int fd;
     char filename[50] = "/home/keats/LY/bin/hello";
+    char new_filename[50] = "/home/keats/LY/bin/hello_tramp";
 
-    Elf64_Ehdr ehdr;    // ELF header (64 byte)
-
-    fd = open(filename, O_RDWR);
-    if (fd < 0) {
+    int fd = open(filename, O_RDONLY);
+    int new_fd = open(new_filename, O_RDWR | O_CREAT, 0666);
+    
+    if (fd < 0 || new_fd < 0) {
         printf("Error: opening file\n");
-        return 1;
+        return -1;
     }
 
-    read_elf_header(fd, &ehdr);
-    print_elf_header(&ehdr);
+    uint64_t off  = create_trampoline_section(fd, new_fd, ".tramp", 0x1000, 0x1000);
 
-
-    uint64_t phoff = ehdr.e_phoff;      // Start of program headers
-    uint16_t phnum = ehdr.e_phnum;      // Number of program headers
-
-    Elf64_Phdr phdr[phnum];             // Program header (56 byte)
-
-    read_program_headers(fd, &ehdr, phdr);
-    print_program_headers(&ehdr, phdr);
-
-    uint64_t shoff = ehdr.e_shoff;          // Start of section headers
-    uint16_t shnum = ehdr.e_shnum;          // Number of section headers
-
-    Elf64_Shdr shdr[shnum];                 // Section header (64 byte)
-
-    read_section_headers(fd, &ehdr, shdr);
-    print_section_headers(&ehdr, shdr);
+    printf("Trampoline section created at 0x%lx\n", off);
 
     close(fd);
     return 0;

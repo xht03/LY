@@ -2,10 +2,10 @@
     "version": "0.2.0",
     "configurations": [
         {
-            "name": "Debug demo3.c",
+            "name": "Debug demo1.c",
             "type": "cppdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/bin/demo3",
+            "program": "${workspaceFolder}/bin/demo1",
             "args": [],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
@@ -19,7 +19,7 @@
                     "ignoreFailures": true
                 }
             ],
-            "preLaunchTask": "build demo3",
+            "preLaunchTask": "build demo1",
             "miDebuggerPath": "/usr/bin/gdb",
             "logging": {
                 "trace": true,

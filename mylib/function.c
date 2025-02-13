@@ -475,9 +475,8 @@ uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint1
 
         uint64_t align = MAX(shr_align, phr_align);     // Final alignment
 
-        // Calculate start offset and address
-        new_shdr[i].sh_addr = ALIGN_UP(off, align);
-        new_shdr[i].sh_offset = ALIGN_UP(addr, align);
+        // Calculate start offset
+        new_shdr[i].sh_offset = ALIGN_UP(off, align);
 
         // Write into new file
         char *buf = read_section_by_index(fd, i);       // Section data
@@ -491,8 +490,17 @@ uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint1
             return -1;
         }
 
+        // Update new offset
         off = new_shdr[i].sh_offset + shdr[i].sh_size;
-        addr = new_shdr[i].sh_addr + shdr[i].sh_size;
+
+        // Calculate start address (if the section is loadable)
+        if (shdr[i].sh_flags & SHF_ALLOC) {
+            new_shdr[i].sh_addr = ALIGN_UP(addr, align);
+            addr = new_shdr[i].sh_addr + shdr[i].sh_size;
+        }
+        else {
+            new_shdr[i].sh_addr = 0;
+        }
 
         // If the section is the section header string table
         // Add the trampline section name to the end of the string table
@@ -511,7 +519,7 @@ uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint1
             new_shdr[i].sh_size += strlen(section_name) + 1;
             
             off += strlen(section_name) + 1;
-            addr += strlen(section_name) + 1;
+            // addr += strlen(section_name) + 1;
         }
     }
 

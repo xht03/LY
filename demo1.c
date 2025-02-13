@@ -26,7 +26,7 @@ int main()
         return -1;
     }
 
-    uint64_t off  = create_trampoline_section(fd, new_fd, ".tramp", 0x1000, 0x1000);
+    uint64_t off  = create_trampoline_section(fd, new_fd, ".tramp", 0x1000, 16);
 
     printf("Trampoline section created at 0x%lx\n", off);
 

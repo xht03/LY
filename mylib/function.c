@@ -446,10 +446,10 @@ uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint1
     Elf64_Shdr new_shdr[new_ehdr.e_shnum];
     memcpy(new_shdr, shdr, ehdr.e_shnum * sizeof(Elf64_Shdr));
 
-    // --- Copy sections and adjust offset, address ---
+    // --- Copy sections and adjust offset ---
 
     off = sizeof(Elf64_Ehdr) + new_ehdr.e_phnum * sizeof(Elf64_Phdr);
-    addr = sizeof(Elf64_Ehdr) + new_ehdr.e_phnum * sizeof(Elf64_Phdr);
+    // addr = sizeof(Elf64_Ehdr) + new_ehdr.e_phnum * sizeof(Elf64_Phdr);
 
     /* shdr[0] is a null section */
 

@@ -16,7 +16,7 @@ typedef struct {
 int read_elf_header(int fd, Elf64_Ehdr *ehdr);
 int read_program_headers(int fd, Elf64_Ehdr *ehdr, Elf64_Phdr *phdr);
 int read_section_headers(int fd, Elf64_Ehdr *ehdr, Elf64_Shdr *shdr);
-int read_string_table(int fd, Elf64_Ehdr *ehdr, char *shstrtab);
+char* read_string_table(int fd, Elf64_Ehdr *ehdr);
 
 char* read_section_by_index(int fd, uint16_t index);
 
@@ -33,4 +33,4 @@ int copy_elf_header(int new_fd, Elf64_Ehdr *ehdr);
 int copy_sections(int fd, int new_fd, uint16_t shnum, Elf64_Shdr *shdr);
 int copy_elf_file(char *filename, char *new_filename);
 
-uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint16_t section_size, uint64_t section_align);
+uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint16_t section_size);

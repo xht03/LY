@@ -46,10 +46,8 @@ int main()
     read_section_headers(fd, &ehdr, shdr);
     print_section_headers(&ehdr, shdr);
 
-    char *shstrtab = NULL;
+    char *shstrtab = read_string_table(fd, &ehdr);
     
-    read_string_table(fd, &ehdr, shstrtab);
-
     free(shstrtab);
     close(fd);
     return 0;

@@ -10,6 +10,7 @@
 #include "function.h"
 
 #define MAX(a, b) ((a) > (b) ? (a) : (b))
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define ALIGN_UP(x, a) (((x) + (a) - 1) & ~((a) - 1))
 #define ALIGN_DOWN(x, a) ((x) & ~((a) - 1))
 #define CONGRUENT(x, a) ((x) % (a))
@@ -168,11 +169,57 @@ char* read_string_table(int fd, Elf64_Ehdr *ehdr)
     }
 
     // --- Print section header string table ---
-    for(int i = 0; i < shnum; i++) {
-        printf("Section %d: %s\n", i, shstrtab + shdr[i].sh_name);
-    }
+    // for(int i = 0; i < shnum; i++) {
+    //     printf("Section %d: %s\n", i, shstrtab + shdr[i].sh_name);
+    // }
 
     return shstrtab;
+}
+
+int read_dynamic_section(int fd, Elf64_Dyn **dyn)
+{
+    Elf64_Ehdr ehdr;
+    read_elf_header(fd, &ehdr);
+
+    Elf64_Shdr shdr[ehdr.e_shnum];
+    read_section_headers(fd, &ehdr, shdr);
+
+    uint16_t dyn_idx = get_section_index_by_name(fd, ".dynamic");
+    uint16_t entry_num = shdr[dyn_idx].sh_size / shdr[dyn_idx].sh_entsize;  // There may be some invalid entries at the end
+    uint16_t dyn_num = 0;   // Number of valid entries
+
+    *dyn = (Elf64_Dyn *)malloc(entry_num * sizeof(Elf64_Dyn));
+
+    for (uint16_t i = 0; i < entry_num; i++) {
+        if (lseek(fd, shdr[dyn_idx].sh_offset + i * shdr[dyn_idx].sh_entsize, SEEK_SET) < 0) {
+            printf("Error: lseek\n");
+            return -1;
+        }
+
+        if (read(fd, &(*dyn)[i], sizeof(Elf64_Dyn)) != sizeof(Elf64_Dyn)) {
+            printf("Error: reading dynamic section\n");
+            return -1;
+        }
+
+        dyn_num++;
+
+        if ((*dyn)[i].d_tag == DT_NULL) {
+            break;
+        }
+    }
+    return dyn_num;
+}
+
+void print_dynamic_section(Elf64_Dyn *dyn, uint16_t dyn_num)
+{
+    printf("Dynamic Section:\n");
+    printf("Number of entries: %d\n", dyn_num);
+    for (uint16_t i = 0; i < dyn_num; i++) {
+        printf("  Tag:               0x%lx\n", dyn[i].d_tag);
+        printf("  Value:             %lu\n", dyn[i].d_un.d_val);
+        printf("  Pointer:           0x%lx\n", dyn[i].d_un.d_ptr);
+        printf("--------------------------\n");
+    }
 }
 
 char* read_section_by_index(int fd, uint16_t index)
@@ -387,22 +434,19 @@ int copy_elf_file(char *filename, char *new_filename)
     return 0;
 }
 
-int compare_phdr(const void *a, const void *b) {
-    Elf64_Phdr *phdr_a = (Elf64_Phdr *)a;
-    Elf64_Phdr *phdr_b = (Elf64_Phdr *)b;
+uint64_t get_max_vaddr(Elf64_Shdr *shdr, uint16_t shnum)
+{
+    uint64_t max_vaddr = 0;
 
-    if (phdr_a->p_vaddr < phdr_b->p_vaddr) {
-        return -1;
-    } else if (phdr_a->p_vaddr > phdr_b->p_vaddr) {
-        return 1;
-    } else {
-        return 0;
+    for (uint16_t i = 0; i < shnum; i++) {
+        if (shdr[i].sh_addr + shdr[i].sh_size > max_vaddr) {
+            max_vaddr = shdr[i].sh_addr + shdr[i].sh_size;
+        }
     }
+
+    return max_vaddr;
 }
 
-void sort_phdr_by_vaddr(Elf64_Phdr phdr[], size_t phnum) {
-    qsort(phdr, phnum, sizeof(Elf64_Phdr), compare_phdr);
-}
 
 uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint16_t section_size)
 {
@@ -412,10 +456,7 @@ uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint1
      * @note The trampoline section must be loadable into memory and executable.
      */
 
-    uint64_t off = 0;       // To locate offset in the new file
-    uint64_t addr = 0;      // To locate virtual address in the new file
-
-    // --- Collect information ---
+     // --- Collect information ---
     Elf64_Ehdr ehdr;
     read_elf_header(fd, &ehdr);
 
@@ -429,133 +470,117 @@ uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint1
 
     // --- Create new elf header ---
     /**
-     * @brief 
-     * 1. adjust entry point (do it later)
-     * 2. adjust start of section headers (do it later)
-     * 3. number of section headers + 1
-     * 4. section header string table index + 1
+     * @brief
+     * 1. number of section headers + 1
+     * 2. number of program headers + 1
+     * 3. adjust start of section headers
      */
 
     Elf64_Ehdr new_ehdr = ehdr;
     new_ehdr.e_shnum += 1;
-    new_ehdr.e_shstrndx += 1;
+    new_ehdr.e_phnum += 1;
+    
+    uint64_t old_sections_end = shdr[ehdr.e_shnum - 1].sh_offset + shdr[ehdr.e_shnum - 1].sh_size + strlen(section_name) + 1;
+    uint64_t tramp_offset = ALIGN_UP(old_sections_end, 4096);
+
+    new_ehdr.e_shoff = ALIGN_UP(tramp_offset + section_size, 8);
+
 
     // --- Create new section headers ---
     /**
      * @brief 
-     * 1. Copy all section headers before .text
-     * 2. Create a new section header for the trampoline section
-     * 3. Copy all section headers after .text
-     * 4. Extend the section header string table
-     * 5. Adjust the offset of each section header
-     * 6. Adjust the address of each section header (do it later)
+     * 1. Copy all old section headers
+     * 2. Adjust the offsets of section headers before .init
+     * 2. Extend the section header string table
+     * 3. Add the new section header
      */
 
-    Elf64_Shdr new_shdr[new_ehdr.e_shnum];
+    Elf64_Shdr new_shdr[ehdr.e_shnum + 1];
 
-    uint16_t textIdx = get_section_index_by_name(fd, ".text");
-    uint16_t bssIdx = get_section_index_by_name(fd, ".bss");
-
-    for (uint16_t i = 0; i <= textIdx; i++) {
+    for (uint16_t i = 0; i < ehdr.e_shnum; i++) {
         new_shdr[i] = shdr[i];
     }
 
-    off = new_shdr[textIdx].sh_offset + new_shdr[textIdx].sh_size;
+    uint16_t initIdx = get_section_index_by_name(fd, ".init");
 
-    new_shdr[textIdx + 1].sh_name = shdr[ehdr.e_shstrndx].sh_size;
-    new_shdr[textIdx + 1].sh_type = SHT_PROGBITS;
-    new_shdr[textIdx + 1].sh_flags = SHF_ALLOC | SHF_EXECINSTR;
-    new_shdr[textIdx + 1].sh_addr = 0;  // To be filled later
-    new_shdr[textIdx + 1].sh_offset = ALIGN_UP(off, 16);
-    new_shdr[textIdx + 1].sh_size = section_size;
-    new_shdr[textIdx + 1].sh_link = 0;
-    new_shdr[textIdx + 1].sh_info = 0;
-    new_shdr[textIdx + 1].sh_addralign = 16;
-    new_shdr[textIdx + 1].sh_entsize = 0;
-
-    off = new_shdr[textIdx + 1].sh_offset + new_shdr[textIdx + 1].sh_size;
-
-    for (uint16_t i = textIdx + 2; i < new_ehdr.e_shnum; i++) {
-        new_shdr[i] = shdr[i - 1];
-        new_shdr[i].sh_offset = ALIGN_UP(off, shdr[i - 1].sh_addralign);
-
-        // need to add the new section name to shstrtab
-        if (i == new_ehdr.e_shstrndx) {
-            new_shdr[i].sh_size += strlen(section_name) + 1;
-        }
-
-        off = new_shdr[i].sh_offset + new_shdr[i].sh_size;
+    new_shdr[1].sh_offset = shdr[1].sh_offset + sizeof(Elf64_Phdr);
+    new_shdr[1].sh_addr = phdr[1].p_vaddr + sizeof(Elf64_Phdr);
+    for (uint16_t i = 2; i < initIdx; i++) {
+        new_shdr[i].sh_offset = ALIGN_UP(new_shdr[i - 1].sh_offset + new_shdr[i - 1].sh_size, new_shdr[i].sh_addralign);
+        new_shdr[i].sh_addr = ALIGN_UP(new_shdr[i - 1].sh_addr + new_shdr[i - 1].sh_size, new_shdr[i].sh_addralign);
     }
 
-    
+    if (new_shdr[initIdx - 1].sh_offset +  new_shdr[initIdx - 1].sh_size > new_shdr[initIdx].sh_offset) {
+        printf("Error: no space for new program header.\n");
+        return -1;
+    }
 
-    new_ehdr.e_shoff = ALIGN_UP(off, 8);
+    new_shdr[ehdr.e_shstrndx].sh_size += strlen(section_name) + 1;
+
+    new_shdr[ehdr.e_shnum].sh_name = shdr[ehdr.e_shstrndx].sh_size;
+    new_shdr[ehdr.e_shnum].sh_type = SHT_PROGBITS;
+    new_shdr[ehdr.e_shnum].sh_flags = SHF_ALLOC | SHF_EXECINSTR;
+    new_shdr[ehdr.e_shnum].sh_addr = ALIGN_UP(get_max_vaddr(new_shdr, ehdr.e_shnum), 0x1000);
+    new_shdr[ehdr.e_shnum].sh_offset = tramp_offset;
+    new_shdr[ehdr.e_shnum].sh_size = section_size;
+    new_shdr[ehdr.e_shnum].sh_link = 0;
+    new_shdr[ehdr.e_shnum].sh_info = 0;
+    new_shdr[ehdr.e_shnum].sh_addralign = 16;
+    new_shdr[ehdr.e_shnum].sh_entsize = 0;
 
     // --- Create new program headers ---
     /**
-     * @brief Allocate memory space to 4 loadable segments first, which contain the remaining segments.
+     * @brief
+     * 1. Copy all old program headers
+     * 2. Keep vaddr unchanged, but adjust offset
+     * 3. Add a new program header
      */
-    Elf64_Phdr new_phdr[ehdr.e_phnum];
+    Elf64_Phdr new_phdr[ehdr.e_phnum + 1];
 
     for (uint16_t i = 0; i < ehdr.e_phnum; i++) {
-        if (phdr[i].p_type == PT_LOAD) {
-
-            uint16_t startIdx = seg2sec[i].sec_idx[0];
-            if (startIdx > textIdx) {
-                startIdx += 1;
-            }
-
-            uint16_t endIdx = seg2sec[i].sec_idx[seg2sec[i].sec_num - 1];
-            if (endIdx > textIdx) {
-                endIdx += 1;
-            }
-
-            new_phdr[i].p_type = PT_LOAD;
-            new_phdr[i].p_flags = phdr[i].p_flags;
-            new_phdr[i].p_offset = shdr[startIdx].sh_offset;
-            new_phdr[i].p_align = phdr[i].p_align;
-            new_phdr[i].p_vaddr = ALIGN_UP(addr, new_phdr[i].p_align) + CONGRUENT(new_shdr[startIdx].sh_offset, new_phdr[i].p_align);
-            new_phdr[i].p_paddr = new_phdr[i].p_vaddr;
-            new_phdr[i].p_filesz = shdr[endIdx].sh_offset + shdr[endIdx].sh_size - shdr[startIdx].sh_offset;
-            new_phdr[i].p_memsz = new_phdr[i].p_filesz;
-
-            if (bssIdx + 1 >= startIdx && bssIdx + 1 <= endIdx) {
-                new_phdr[i].p_memsz += 8;
-            }
-            
-            for (uint16_t j = startIdx; j <= endIdx; j++) {
-                new_shdr[j].sh_addr = new_phdr[i].p_vaddr + (new_shdr[j].sh_offset - shdr[startIdx].sh_offset);
-            }
-
-            addr = new_phdr[i].p_vaddr + new_phdr[i].p_memsz;
-        }
+        new_phdr[i] = phdr[i];
     }
 
-    for (uint16_t i = 0; i < ehdr.e_phnum; i++) {
-        if (phdr[i].p_type != PT_LOAD) {
+    new_phdr[0].p_filesz += sizeof(Elf64_Phdr);
+    new_phdr[0].p_memsz += sizeof(Elf64_Phdr);
 
-            uint16_t startIdx = seg2sec[i].sec_idx[0];
-            if (startIdx > textIdx) {
-                startIdx += 1;
-            }
-
-            uint16_t endIdx = seg2sec[i].sec_idx[seg2sec[i].sec_num - 1];
-            if (endIdx > textIdx) {
-                endIdx += 1;
-            }
-
-            new_phdr[i].p_type = phdr[i].p_type;
-            new_phdr[i].p_flags = phdr[i].p_flags;
-            new_phdr[i].p_offset = shdr[startIdx].sh_offset;
-            new_phdr[i].p_vaddr = shdr[startIdx].sh_addr;
-            new_phdr[i].p_paddr = shdr[startIdx].sh_addr;
-            new_phdr[i].p_filesz = shdr[endIdx].sh_offset + shdr[endIdx].sh_size - shdr[startIdx].sh_offset;
-            new_phdr[i].p_memsz = new_phdr[i].p_filesz;
-            new_phdr[i].p_align = phdr[i].p_align;
+    for (uint16_t i = 1; i < ehdr.e_phnum; i++) {
+        if (seg2sec[i].sec_num == 0) {
+            continue;
         }
+
+        uint64_t start_off = new_shdr[seg2sec[i].sec_idx[0]].sh_offset;
+        uint64_t end_off = new_shdr[seg2sec[i].sec_idx[0]].sh_offset + shdr[seg2sec[i].sec_idx[0]].sh_size;
+
+        uint64_t start_addr = new_shdr[seg2sec[i].sec_idx[0]].sh_addr;
+        uint64_t end_addr = new_shdr[seg2sec[i].sec_idx[0]].sh_addr + shdr[seg2sec[i].sec_idx[0]].sh_size;
+
+        for (uint16_t j = 0; j < seg2sec[i].sec_num; j++) {
+            start_off = MIN(start_off, new_shdr[seg2sec[i].sec_idx[j]].sh_offset);
+            end_off = MAX(end_off, new_shdr[seg2sec[i].sec_idx[j]].sh_offset + shdr[seg2sec[i].sec_idx[j]].sh_size);
+
+            start_addr = MIN(start_addr, new_shdr[seg2sec[i].sec_idx[j]].sh_addr);
+            end_addr = MAX(end_addr, new_shdr[seg2sec[i].sec_idx[j]].sh_addr + shdr[seg2sec[i].sec_idx[j]].sh_size);
+        }
+
+        new_phdr[i].p_offset = start_off;
+        new_phdr[i].p_filesz = end_off - start_off;
+
+        new_phdr[i].p_vaddr = start_addr;
+        new_phdr[i].p_paddr = start_addr;
+        new_phdr[i].p_memsz = end_addr - start_addr;
     }
 
-    new_ehdr.e_entry = new_shdr[textIdx].sh_addr;
+
+    new_phdr[ehdr.e_phnum].p_type = PT_LOAD;
+    new_phdr[ehdr.e_phnum].p_flags = PF_X | PF_R;
+    new_phdr[ehdr.e_phnum].p_offset = tramp_offset;
+    new_phdr[ehdr.e_phnum].p_vaddr = new_shdr[ehdr.e_shnum].sh_addr;
+    new_phdr[ehdr.e_phnum].p_paddr = new_shdr[ehdr.e_shnum].sh_addr;
+    new_phdr[ehdr.e_phnum].p_filesz = section_size;
+    new_phdr[ehdr.e_phnum].p_memsz = section_size;
+    new_phdr[ehdr.e_phnum].p_align = 4096;
+
 
     // --- Write new elf header ---
     if (lseek(new_fd, 0, SEEK_SET) < 0) {
@@ -589,48 +614,21 @@ uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint1
 
     // --- Write sections ---
 
-    for (uint16_t i = 0; i <= textIdx; i++) {
+    for (uint16_t i = 0; i < ehdr.e_shnum; i++) {
         char *buf = (char *)malloc(shdr[i].sh_size);
 
         if (lseek(fd, shdr[i].sh_offset, SEEK_SET) < 0) {
             printf("Error: lseek\n");
+            return -1;
+        }
+        
+        if (read(fd, buf, shdr[i].sh_size) != shdr[i].sh_size) {
+            printf("Error: writing section\n");
             return -1;
         }
 
         if(lseek(new_fd, new_shdr[i].sh_offset, SEEK_SET) < 0) {
             printf("Error: lseek\n");
-            return -1;
-        }
-
-        if (read(fd, buf, shdr[i].sh_size) != shdr[i].sh_size) {
-            printf("Error: writing section\n");
-            return -1;
-        }
-
-        
-        if(write(new_fd, buf, shdr[i].sh_size) != shdr[i].sh_size) {
-            printf("Error: writing section\n");
-            return -1;
-        }
-
-        free(buf);
-    }
-
-    for (uint16_t i = textIdx + 1; i < ehdr.e_shnum; i++) {
-        char *buf = (char *)malloc(shdr[i].sh_size);
-
-        if (lseek(fd, shdr[i].sh_offset, SEEK_SET) < 0) {
-            printf("Error: lseek\n");
-            return -1;
-        }
-
-        if(lseek(new_fd, new_shdr[i + 1].sh_offset, SEEK_SET) < 0) {
-            printf("Error: lseek\n");
-            return -1;
-        }
-
-        if (read(fd, buf, shdr[i].sh_size) != shdr[i].sh_size) {
-            printf("Error: writing section\n");
             return -1;
         }
         
@@ -643,7 +641,7 @@ uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint1
 
         // Write the new section name into shstrtab
         if (i == ehdr.e_shstrndx) {
-            if (lseek(new_fd, new_shdr[i + 1].sh_offset + shdr[i].sh_size, SEEK_SET) < 0) {
+            if (lseek(new_fd, new_shdr[i].sh_offset + shdr[i].sh_size, SEEK_SET) < 0) {
                 printf("Error: lseek\n");
                 return -1;
             }
@@ -652,6 +650,95 @@ uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint1
                 printf("Error: writing section\n");
                 return -1;
             }
+        }
+    }
+
+    // --- Adjust new dynamic section ---
+    uint16_t dyn_idx = get_section_index_by_name(fd, ".dynamic");
+    Elf64_Dyn *dyn = NULL;
+    uint16_t dyn_num = read_dynamic_section(fd, &dyn);
+
+    for (uint16_t i = 0; i < dyn_num; i++) {
+        if (dyn[i].d_tag == DT_NULL) {
+            break;
+        }
+
+        if (dyn[i].d_tag == DT_GNU_HASH) {
+            uint16_t gnu_hash_idx = get_section_index_by_name(fd, ".gnu.hash");
+            if (gnu_hash_idx == -1) {
+                printf("Error: gnu hash section not found\n");
+                return -1;
+            }
+            dyn[i].d_un.d_ptr = new_shdr[gnu_hash_idx].sh_addr;
+        } 
+        else if (dyn[i].d_tag == DT_STRTAB) {
+            uint16_t dynstr_idx = get_section_index_by_name(fd, ".dynstr");
+            if (dynstr_idx == -1) {
+                printf("Error: dynstr section not found\n");
+                return -1;
+            }
+            dyn[i].d_un.d_ptr = new_shdr[dynstr_idx].sh_addr;
+        }
+        else if (dyn[i].d_tag == DT_SYMTAB) {
+            uint16_t dynsym_idx = get_section_index_by_name(fd, ".dynsym");
+            if (dynsym_idx == -1) {
+                printf("Error: dynsym section not found\n");
+                return -1;
+            }
+            dyn[i].d_un.d_ptr = new_shdr[dynsym_idx].sh_addr;
+        }
+        else if (dyn[i].d_tag == DT_REL) {
+            uint16_t rela_plt_idx = get_section_index_by_name(fd, ".rela.plt");
+            if (rela_plt_idx == -1) {
+                printf("Error: rela section not found\n");
+                return -1;
+            }
+            dyn[i].d_un.d_ptr = new_shdr[rela_plt_idx].sh_addr;
+        }
+        else if (dyn[i].d_tag == DT_RELA) {
+            uint16_t rela_dyn_idx = get_section_index_by_name(fd, ".rela.dyn");
+            if (rela_dyn_idx == -1) {
+                printf("Error: rela section not found\n");
+                return -1;
+            }
+            dyn[i].d_un.d_ptr = new_shdr[rela_dyn_idx].sh_addr;
+        }
+        /*else if (dyn[i].d_tag == DT_RELASZ) {
+            uint16_t rela_dyn_idx = get_section_index_by_name(fd, ".rela.dyn");
+            if (rela_dyn_idx == -1) {
+                printf("Error: rela section not found\n");
+                return -1;
+            }
+            dyn[i].d_un.d_val = new_shdr[rela_dyn_idx].sh_size;
+        }*/
+        else if (dyn[i].d_tag == DT_VERNEED) {
+            uint16_t gnu_version_r_idx = get_section_index_by_name(fd, ".gnu.version_r");
+            if (gnu_version_r_idx == -1) {
+                printf("Error: gnu version r section not found\n");
+                return -1;
+            }
+            dyn[i].d_un.d_ptr = new_shdr[gnu_version_r_idx].sh_addr;
+        }
+        else if (dyn[i].d_tag == DT_VERSYM) {
+            uint16_t gnu_version_idx = get_section_index_by_name(fd, ".gnu.version");
+            if (gnu_version_idx == -1) {
+                printf("Error: gnu version section not found\n");
+                return -1;
+            }
+            dyn[i].d_un.d_ptr = new_shdr[gnu_version_idx].sh_addr;
+        }
+    }
+
+    // Write new dynamic section
+    for (uint16_t i = 0; i < dyn_num; i++) {
+        if (lseek(new_fd, new_shdr[dyn_idx].sh_offset + i * new_shdr[dyn_idx].sh_entsize, SEEK_SET) < 0) {
+            printf("Error: lseek\n");
+            return -1;
+        }
+
+        if (write(new_fd, &dyn[i], sizeof(Elf64_Dyn)) != sizeof(Elf64_Dyn)) {
+            printf("Error: writing dynamic section\n");
+            return -1;
         }
     }
 
@@ -680,5 +767,5 @@ uint64_t create_trampoline_section(int fd, int new_fd, char *section_name, uint1
     close(fd);
     close(new_fd);
     
-    return new_shdr[textIdx + 1].sh_addr;
+    return new_phdr[ehdr.e_phnum].p_vaddr;
 }

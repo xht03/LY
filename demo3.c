@@ -18,6 +18,10 @@ int main()
     int fd;
     char filename[50] = "/home/keats/LY/bin/hello";
 
+    // char filename[50];
+    // printf("Enter the filename: ");
+    // scanf("%s", filename);
+
     Elf64_Ehdr ehdr;    // ELF header (64 byte)
 
     fd = open(filename, O_RDWR);
@@ -47,6 +51,10 @@ int main()
     print_section_headers(&ehdr, shdr);
 
     char *shstrtab = read_string_table(fd, &ehdr);
+
+    Elf64_Dyn* dyn;
+    uint16_t dyn_num = read_dynamic_section(fd, &dyn);
+    print_dynamic_section(dyn, dyn_num);
     
     free(shstrtab);
     close(fd);

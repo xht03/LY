@@ -17,6 +17,7 @@ int read_elf_header(int fd, Elf64_Ehdr *ehdr);
 int read_program_headers(int fd, Elf64_Ehdr *ehdr, Elf64_Phdr *phdr);
 int read_section_headers(int fd, Elf64_Ehdr *ehdr, Elf64_Shdr *shdr);
 char* read_string_table(int fd, Elf64_Ehdr *ehdr);
+int read_dynamic_section(int fd, Elf64_Dyn **dyn);  // return the number of valid entries
 
 char* read_section_by_index(int fd, uint16_t index);
 
@@ -28,6 +29,7 @@ int free_seg2sec_mapping(SecList *seg2sec, Elf64_Ehdr *ehdr);
 void print_elf_header(Elf64_Ehdr *ehdr);
 void print_program_headers(Elf64_Ehdr *ehdr, Elf64_Phdr *phdr);
 void print_section_headers(Elf64_Ehdr *ehdr, Elf64_Shdr *shdr);
+void print_dynamic_section(Elf64_Dyn *dyn, uint16_t dyn_num);
 
 int copy_elf_header(int new_fd, Elf64_Ehdr *ehdr);
 int copy_sections(int fd, int new_fd, uint16_t shnum, Elf64_Shdr *shdr);

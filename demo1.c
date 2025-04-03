@@ -15,8 +15,8 @@
 
 int main()
 {
-    char filename[50] = "/home/keats/LY/bin/hello";
-    char new_filename[50] = "/home/keats/LY/bin/hello_tramp";
+    char filename[50] = "/home/keats/LY/bin/sum";
+    char new_filename[50] = "/home/keats/LY/bin/sum_tramp";
 
     int fd = open(filename, O_RDONLY);
     int new_fd = open(new_filename, O_RDWR | O_CREAT, 0666);
